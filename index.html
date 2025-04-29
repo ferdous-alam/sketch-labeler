@@ -1,199 +1,271 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>ABS Ship Sketch Project</title>
-  <style>
-    body {
-      font-family: sans-serif;
-      margin: 0;
-      padding: 0;
-      background: #f4f4f4;
-      text-align: center;
-    }
-
-    h1 {
-      margin-top: 30px;
-      font-size: 28px;
-      color: #222;
-    }
-
-    .container {
-      display: inline-block;
-      padding: 20px;
-      background: white;
-      border-radius: 8px;
-      box-shadow: 0 0 10px rgba(0,0,0,0.1);
-      margin-top: 20px;
-    }
-
-    canvas {
-      border: 1px solid #ccc;
-      margin-top: 10px;
-    }
-
-    #output {
-      white-space: pre;
-      margin-top: 10px;
-      background: #f9f9f9;
-      padding: 10px;
-      text-align: left;
-      font-size: 13px;
-      border-radius: 6px;
-      max-width: 800px;
-      overflow-x: auto;
-    }
-
-    #labelInput {
-      position: absolute;
-      display: none;
-      z-index: 10;
-      background-color: black;
-      color: white;
-      border: none;
-      padding: 6px 10px;
-      border-radius: 8px;
-      font-size: 14px;
-      font-family: monospace;
-      box-shadow: 0 0 4px rgba(0,0,0,0.3);
-    }
-  </style>
+<meta charset="UTF-8">
+<title>Ship Section Vectorizer</title>
+<style>
+  body{font-family:sans-serif;background:#f4f4f4;text-align:center;margin:0}
+  h1{margin-top:30px;font-size:28px;color:#222}
+  .container{display:inline-block;padding:20px;background:#fff;border-radius:8px;
+             box-shadow:0 0 10px rgba(0,0,0,.1);margin-top:20px}
+  canvas{border:1px solid #ccc;margin-top:10px;cursor:crosshair}
+  #output{white-space:pre;margin-top:10px;background:#f9f9f9;padding:10px;text-align:left;
+          font-size:13px;border-radius:6px;max-width:800px;overflow-x:auto}
+  #labelInput{position:absolute;display:none;z-index:10;background:#000;color:#fff;border:none;
+              padding:6px 10px;border-radius:8px;font-size:14px;font-family:monospace;
+              box-shadow:0 0 4px rgba(0,0,0,.3)}
+  button{margin:5px;padding:8px 12px;font-size:14px;cursor:pointer}
+  button.active{background:#1976d2;color:#fff}
+  button.hidden {opacity:.35}
+</style>
 </head>
 <body>
 
-<h1>Engineering Sketch Labeling</h1>
+<h1>Ship Section Vectorizer</h1>
 
 <div class="container">
-  <input type="file" accept="image/*" onchange="loadImage(event)">
-  <br><br>
-  <canvas id="canvas" style="cursor: crosshair;"></canvas>
-  <input type="text" id="labelInput" placeholder="Label this section" onkeydown="handleLabelEnter(event)">
+  <input type="file" accept="image/*" onchange="loadImage(event)"><br><br>
+
+  <button id="btn-box"   onclick="setMode('box')">Box</button>
+  <button id="btn-line"  onclick="setMode('line')">Line</button>
+  <button id="btn-curve" onclick="setMode('curve')">Curve</button><br>
+
+  <!-- visibility toggles -->
+  <button id="toggle-box"   onclick="toggleLayer('boxes')">👁 Boxes</button>
+  <button id="toggle-shape" onclick="toggleLayer('shapes')">👁 Shapes</button><br><br>
+
+  <canvas id="canvas"></canvas>
+  <input id="labelInput" placeholder="Label" onkeydown="handleLabelEnter(event)">
   <br><br>
   <button onclick="download()">Download JSON</button>
   <pre id="output"></pre>
 </div>
 
 <script>
-  const canvas = document.getElementById('canvas');
-  const ctx = canvas.getContext('2d');
-  const labelInput = document.getElementById('labelInput');
-  let img = new Image();
-  let boxes = [];
-  let start = null;
-  let current = null;
-  let pendingBox = null;
-  let selectedBoxIndex = null;
+/* ---------- globals ---------- */
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+const labelI = document.getElementById('labelInput');
+let   img    = new Image();
 
-  function loadImage(event) {
-    const file = event.target.files[0];
-    const reader = new FileReader();
-    reader.onload = e => { img.src = e.target.result; };
-    reader.readAsDataURL(file);
-  }
+let mode='box';                         // drawing tool
+let showBoxes  = true;                  // layer visibility flags
+let showShapes = true;
 
-  img.onload = () => {
-    canvas.width = img.width;
-    canvas.height = img.height;
-    drawCanvas();
-  };
+let boxes   = [];                       // {x,y,w,h,label}
+let shapes  = [];                       // {points:[{x,y}],label,mode:'line'|'curve'}
+let currentPoints=[]; let boxStart=null; let boxCurrent=null; let pendingBox=null;
+let hoverPoint=null, selectedShape=null, selectedBox=null;
+const SNAP=10;
 
-  function drawCanvas() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0);
-    boxes.forEach((b, i) => {
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = (i === selectedBoxIndex) ? 'blue' : 'red';
-      ctx.setLineDash(i === selectedBoxIndex ? [6] : []);
-      ctx.strokeRect(b.x, b.y, b.width, b.height);
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'red';
-      ctx.font = '16px sans-serif';
-      ctx.fillText(b.label, b.x + 4, b.y + 18);
-    });
-    if (start && current) {
-      const w = current.x - start.x;
-      const h = current.y - start.y;
-      ctx.strokeStyle = 'blue';
-      ctx.strokeRect(start.x, start.y, w, h);
-    }
-    document.getElementById('output').textContent = JSON.stringify(boxes, null, 2);
-  }
+/* ---------- load image ---------- */
+function loadImage(ev){
+  const f=ev.target.files[0]; if(!f) return;
+  const r=new FileReader(); r.onload=e=>img.src=e.target.result; r.readAsDataURL(f);
+}
+img.onload=()=>{canvas.width=img.width;canvas.height=img.height;draw();};
 
-  canvas.onmousedown = e => {
-    const x = e.offsetX, y = e.offsetY;
-    labelInput.style.display = 'none';
-    selectedBoxIndex = boxes.findIndex(b =>
-      x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height
-    );
-    if (selectedBoxIndex === -1) {
-      start = { x, y };
-      current = null;
-    }
-    drawCanvas();
-  };
+/* ---------- ui helpers ---------- */
+function setMode(m){
+  mode=m;
+  ['box','line','curve'].forEach(id=>{
+    document.getElementById('btn-'+id).classList.toggle('active',id===m);
+  });
+  draw();
+}
+function toggleLayer(layer){
+  if(layer==='boxes'){showBoxes=!showBoxes;
+    document.getElementById('toggle-box').classList.toggle('hidden',!showBoxes);}
+  if(layer==='shapes'){showShapes=!showShapes;
+    document.getElementById('toggle-shape').classList.toggle('hidden',!showShapes);}
+  draw();
+}
+setMode(mode);
 
-  canvas.onmousemove = e => {
-    const x = e.offsetX, y = e.offsetY;
-    const hovering = boxes.some(b =>
-      x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height
-    );
-    canvas.style.cursor = hovering ? 'pointer' : 'crosshair';
-
-    if (start) {
-      current = { x, y };
-      drawCanvas();
-    }
-  };
-
-  canvas.onmouseup = e => {
-    if (!start) return;
-    const end = { x: e.offsetX, y: e.offsetY };
-    const box = {
-      x: Math.min(start.x, end.x),
-      y: Math.min(start.y, end.y),
-      width: Math.abs(end.x - start.x),
-      height: Math.abs(end.y - start.y)
-    };
-    pendingBox = box;
-    labelInput.style.left = (canvas.offsetLeft + box.x + 5) + 'px';
-    labelInput.style.top = (canvas.offsetTop + box.y + 5) + 'px';
-    labelInput.value = '';
-    labelInput.style.display = 'block';
-    labelInput.focus();
-    start = null;
-    current = null;
-    drawCanvas();
-  };
-
-  function handleLabelEnter(e) {
-    if (e.key === 'Enter' && pendingBox) {
-      const label = labelInput.value.trim();
-      if (label) {
-        pendingBox.label = label;
-        boxes.push(pendingBox);
-        pendingBox = null;
-        labelInput.style.display = 'none';
-        drawCanvas();
-      }
-    }
-  }
-
-  function download() {
-    const blob = new Blob([JSON.stringify(boxes, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'labeled_boxes.json';
-    a.click();
-  }
-
-  window.addEventListener('keydown', e => {
-    if (e.key === 'Delete' && selectedBoxIndex !== null) {
-      boxes.splice(selectedBoxIndex, 1);
-      selectedBoxIndex = null;
-      drawCanvas();
+/* ---------- math helpers ---------- */
+const mid=a=>a[Math.floor(a.length/2)];
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+function distSeg(p,a,b){
+  const dx=b.x-a.x, dy=b.y-a.y;
+  if(!dx&&!dy) return dist(p,a);
+  const t=Math.max(0,Math.min(1, ((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy)));
+  return dist(p,{x:a.x+t*dx,y:a.y+t*dy});
+}
+function snapPoint(x,y){
+  if(!showShapes) return null;
+  let best=null,bestD=SNAP;
+  shapes.forEach(s=>s.points.forEach(p=>{
+    const d=dist(p,{x,y}); if(d<bestD){best=p;bestD=d;}
+  }));
+  return best;
+}
+function hitShape(x,y){
+  if(!showShapes) return null;
+  let idx=null,best=SNAP;
+  shapes.forEach((s,i)=>{
+    for(let k=0;k<s.points.length-1;k++){
+      const d=distSeg({x,y},s.points[k],s.points[k+1]);
+      if(d<best){best=d;idx=i;}
     }
   });
-</script>
+  return idx;
+}
+function hitBox(x,y){
+  if(!showBoxes) return -1;
+  return boxes.findIndex(b=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h);
+}
 
+/* ---------- drawing primitives ---------- */
+function drawShape(pts,m){
+  if(pts.length<2) return;
+  ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+  if(m==='line'){ pts.slice(1).forEach(p=>ctx.lineTo(p.x,p.y)); }
+  else{
+    for(let i=1;i<pts.length-1;i++){
+      const xc=(pts[i].x+pts[i+1].x)/2, yc=(pts[i].y+pts[i+1].y)/2;
+      ctx.quadraticCurveTo(pts[i].x,pts[i].y,xc,yc);
+    }
+    const p=pts[pts.length-1]; ctx.quadraticCurveTo(p.x,p.y,p.x,p.y);
+  }
+  ctx.stroke();
+}
+
+/* ---------- main draw ---------- */
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(img,0,0);
+
+  /* boxes layer */
+  if(showBoxes){
+    boxes.forEach((b,i)=>{
+      ctx.lineWidth=2;
+      ctx.strokeStyle=(i===selectedBox)?'blue':'red';
+      if(i===selectedBox) ctx.setLineDash([6]); else ctx.setLineDash([]);
+      ctx.strokeRect(b.x,b.y,b.w,b.h); ctx.setLineDash([]);
+      ctx.fillStyle='red'; ctx.font='16px sans-serif';
+      ctx.fillText(b.label,b.x+4,b.y+18);
+    });
+    if(boxStart&&boxCurrent){
+      ctx.strokeStyle='blue';
+      ctx.strokeRect(boxStart.x,boxStart.y,
+                     boxCurrent.x-boxStart.x,boxCurrent.y-boxStart.y);
+    }
+  }
+
+  /* shapes layer */
+  if(showShapes){
+    shapes.forEach((s,i)=>{
+      ctx.lineWidth=(i===selectedShape)?5:4;
+      ctx.strokeStyle=(i===selectedShape)?'blue':'red';
+      if(i===selectedShape) ctx.setLineDash([6]); else ctx.setLineDash([]);
+      drawShape(s.points,s.mode); ctx.setLineDash([]);
+      const m=mid(s.points); ctx.fillStyle='red'; ctx.font='16px sans-serif';
+      ctx.fillText(s.label,m.x+5,m.y-5);
+    });
+
+    if(currentPoints.length){
+      ctx.lineWidth=4; ctx.strokeStyle='green';
+      drawShape(currentPoints,mode);
+      ctx.fillStyle='blue';
+      currentPoints.forEach(p=>ctx.fillRect(p.x-3,p.y-3,6,6));
+    }
+  }
+
+  if(hoverPoint){
+    ctx.strokeStyle='green'; ctx.lineWidth=2;
+    ctx.strokeRect(hoverPoint.x-5,hoverPoint.y-5,10,10);
+  }
+
+  document.getElementById('output').textContent=
+    JSON.stringify({boxes,shapes},null,2);
+}
+
+/* ---------- mouse ---------- */
+canvas.onmousedown=e=>{
+  const x=e.offsetX,y=e.offsetY; labelI.style.display='none';
+
+  if(mode==='box'){
+    selectedBox=hitBox(x,y);
+    if(selectedBox===-1){boxStart={x,y};boxCurrent=null;}
+  }else{ /* line / curve */
+    if(currentPoints.length){
+      const pt=hoverPoint?{...hoverPoint}:{x,y};
+      currentPoints.push(pt);
+    }else{
+      const onSeg=hitShape(x,y);
+      const onEnd=!!snapPoint(x,y);
+      if(onEnd){selectedShape=null;currentPoints.push({...hoverPoint});}
+      else if(onSeg!==null){selectedShape=onSeg;}
+      else{selectedShape=null;currentPoints.push({x,y});}
+    }
+  }
+  draw();
+};
+canvas.onmousemove=e=>{
+  const x=e.offsetX,y=e.offsetY;
+  if(mode==='box'){
+    if(boxStart){boxCurrent={x,y};}
+    canvas.style.cursor=showBoxes&&hitBox(x,y)!==-1?'pointer':'crosshair';
+  }else{
+    hoverPoint=snapPoint(x,y);
+    canvas.style.cursor=currentPoints.length?'crosshair'
+                     :(showShapes&&hitShape(x,y)!==null?'grab':'crosshair');
+  }
+  draw();
+};
+canvas.onmouseup=e=>{
+  if(mode!=='box'||!boxStart) return;
+  const end={x:e.offsetX,y:e.offsetY};
+  pendingBox={x:Math.min(boxStart.x,end.x),
+              y:Math.min(boxStart.y,end.y),
+              w:Math.abs(end.x-boxStart.x),
+              h:Math.abs(end.y-boxStart.y)};
+  boxStart=boxCurrent=null;
+  labelI.style.left=canvas.offsetLeft+pendingBox.x+5+'px';
+  labelI.style.top =canvas.offsetTop +pendingBox.y+5+'px';
+  labelI.value=''; labelI.style.display='block'; labelI.focus();
+  draw();
+};
+
+/* ---------- keyboard ---------- */
+window.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&currentPoints.length>1&&mode!=='box'){
+    const m=mid(currentPoints);
+    labelI.style.left=canvas.offsetLeft+m.x+5+'px';
+    labelI.style.top =canvas.offsetTop +m.y-5+'px';
+    labelI.value=''; labelI.style.display='block'; labelI.focus();
+  }else if(e.key==='Backspace'&&currentPoints.length){
+    currentPoints.pop();draw();e.preventDefault();
+  }else if(e.key==='Delete'){
+    if(selectedShape!==null){shapes.splice(selectedShape,1);selectedShape=null;}
+    if(selectedBox!==null){boxes.splice(selectedBox,1);selectedBox=null;}
+    draw();
+  }else if((e.ctrlKey||e.metaKey)&&e.key==='z'){
+    if(currentPoints.length) currentPoints.pop();
+    else if(shapes.length) shapes.pop();
+    draw();e.preventDefault();
+  }else if(e.key==='b'){toggleLayer('boxes')}
+    else if(e.key==='l'){toggleLayer('shapes')}
+});
+
+/* ---------- label entry ---------- */
+function handleLabelEnter(e){
+  if(e.key!=='Enter') return;
+  const txt=labelI.value.trim(); labelI.style.display='none';
+  if(mode==='box'&&pendingBox){pendingBox.label=txt;boxes.push(pendingBox);pendingBox=null;}
+  else if(currentPoints.length>1){
+    shapes.push({points:[...currentPoints],label:txt,mode});
+    currentPoints=[];
+  }
+  draw();
+}
+
+/* ---------- download ---------- */
+function download(){
+  const blob=new Blob([JSON.stringify({boxes,shapes},null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);a.download='annotations.json';a.click();
+}
+</script>
 </body>
 </html>
